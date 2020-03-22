@@ -20,26 +20,27 @@ last = wdir + 'last.pt'
 best = wdir + 'best.pt'
 results_file = 'results.txt'
 
+
 # Hyperparameters (results68: 59.9 mAP@0.5 yolov3-spp-416) https://github.com/ultralytics/yolov3/issues/310
 
-hyp = {'giou': 3.54,  # giou loss gain
-       'cls': 37.4,  # cls loss gain
-       'cls_pw': 1.0,  # cls BCELoss positive_weight
-       'obj': 64.3,  # obj loss gain (*=img_size/320 if img_size != 320)
-       'obj_pw': 1.0,  # obj BCELoss positive_weight
-       'iou_t': 0.225,  # iou training threshold
-       'lr0': 0.01,  # initial learning rate (SGD=5E-3, Adam=5E-4)
+hyp = {'giou': 2.99,  # giou loss gain
+       'cls': 41.4,  # cls loss gain
+       'cls_pw': 1,  # cls BCELoss positive_weight
+       'obj': 64.8,  # obj loss gain (*=img_size/320 if img_size != 320)
+       'obj_pw': 1.02,  # obj BCELoss positive_weight
+       'iou_t': 0.211,  # iou training threshold
+       'lr0': 0.00456,  # initial learning rate (SGD=5E-3, Adam=5E-4)
        'lrf': -4.,  # final LambdaLR learning rate = lr0 * (10 ** lrf)
-       'momentum': 0.937,  # SGD momentum
-       'weight_decay': 0.000484,  # optimizer weight decay
-       'fl_gamma': 0.0,  # focal loss gamma (efficientDet default is gamma=1.5)
-       'hsv_h': 0.0138,  # image HSV-Hue augmentation (fraction)
-       'hsv_s': 0.678,  # image HSV-Saturation augmentation (fraction)
-       'hsv_v': 0.36,  # image HSV-Value augmentation (fraction)
-       'degrees': 1.98 * 0,  # image rotation (+/- deg)
-       'translate': 0.05 * 0,  # image translation (+/- fraction)
-       'scale': 0.05 * 0,  # image scale (+/- gain)
-       'shear': 0.641 * 0}  # image shear (+/- deg)
+       'momentum': 0.915,  # SGD momentum
+       'weight_decay': 0.000567,  # optimizer weight decay
+       'fl_gamma': 0.5,  # focal loss gamma
+       'hsv_h': 0.0113,  # image HSV-Hue augmentation (fraction)
+       'hsv_s': 0.691,  # image HSV-Saturation augmentation (fraction)
+       'hsv_v': 0.331,  # image HSV-Value augmentation (fraction)
+       'degrees': 2.06,  # image rotation (+/- deg)
+       'translate': 0.0464,  # image translation (+/- fraction)
+       'scale': 0.0426,  # image scale (+/- gain)
+       'shear': 0.69}  # image shear (+/- deg)
 
 # Overwrite hyp with hyp*.txt (optional)
 f = glob.glob('hyp*.txt')
@@ -77,7 +78,7 @@ def train():
         os.remove(f)
 
     # Initialize model
-    model = Darknet(cfg).to(device)
+    model = Darknet(cfg, arc=opt.arc).to(device)
 
     # Optimizer
     pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
@@ -97,6 +98,7 @@ def train():
         optimizer = optim.SGD(pg0, lr=hyp['lr0'], momentum=hyp['momentum'], nesterov=True)
     optimizer.add_param_group({'params': pg1, 'weight_decay': hyp['weight_decay']})  # add pg1 with weight_decay
     optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
+    optimizer.param_groups[2]['lr'] *= 2.0  # bias lr
     del pg0, pg1, pg2
 
     start_epoch = 0
@@ -137,11 +139,15 @@ def train():
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1', verbosity=0)
 
     # Scheduler https://github.com/ultralytics/yolov3/issues/238
-    lf = lambda x: (1 + math.cos(x * math.pi / epochs)) / 2  # cosine https://arxiv.org/pdf/1812.01187.pdf
-    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf, last_epoch=start_epoch - 1)
-    # scheduler = lr_scheduler.MultiStepLR(optimizer, [round(epochs * x) for x in [0.8, 0.9]], 0.1, start_epoch - 1)
+    # lf = lambda x: 1 - x / epochs  # linear ramp to zero
+    # lf = lambda x: 10 ** (hyp['lrf'] * x / epochs)  # exp ramp
+    # lf = lambda x: 1 - 10 ** (hyp['lrf'] * (1 - x / epochs))  # inverse exp ramp
+    lf = lambda x: 0.5 * (1 + math.cos(x * math.pi / epochs))  # cosine https://arxiv.org/pdf/1812.01187.pdf
+    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
+    # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[round(epochs * x) for x in [0.8, 0.9]], gamma=0.1)
+    scheduler.last_epoch = start_epoch
 
-    # Plot lr schedule
+    # # Plot lr schedule
     # y = []
     # for _ in range(epochs):
     #     scheduler.step()
@@ -190,22 +196,18 @@ def train():
                                              pin_memory=True,
                                              collate_fn=dataset.collate_fn)
 
-    # Model parameters
-    model.nc = nc  # attach number of classes to model
-    model.hyp = hyp  # attach hyperparameters to model
-    model.gr = 0.0  # giou loss ratio (obj_loss = 1.0 or giou)
-    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device)  # attach class weights
-
-    # Model EMA
-    # ema = torch_utils.ModelEMA(model, decay=0.9998)
-
     # Start training
-    nb = len(dataloader)  # number of batches
+    nb = len(dataloader)
     prebias = start_epoch == 0
+    model.nc = nc  # attach number of classes to model
+    model.arc = opt.arc  # attach yolo architecture
+    model.hyp = hyp  # attach hyperparameters to model
+    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device)  # attach class weights
     maps = np.zeros(nc)  # mAP per class
     # torch.autograd.set_detect_anomaly(True)
     results = (0, 0, 0, 0, 0, 0, 0)  # 'P', 'R', 'mAP', 'F1', 'val GIoU', 'val Objectness', 'val Classification'
     t0 = time.time()
+    torch_utils.model_info(model, report='summary')  # 'full' or 'summary'
     print('Using %g dataloader workers' % nw)
     print('Starting training for %g epochs...' % epochs)
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
@@ -214,10 +216,9 @@ def train():
         # Prebias
         if prebias:
             ne = 3  # number of prebias epochs
-            ps = 0.1, 0.9  # prebias settings (lr=0.1, momentum=0.9)
+            ps = np.interp(epoch, [0, ne], [0.1, hyp['lr0'] * 2]), \
+                 np.interp(epoch, [0, ne], [0.9, hyp['momentum']])  # prebias settings (lr=0.1, momentum=0.9)
             if epoch == ne:
-                ps = hyp['lr0'], hyp['momentum']  # normal training settings
-                model.gr = 1.0  # giou loss ratio (obj_loss = giou)
                 print_model_biases(model)
                 prebias = False
 
@@ -240,17 +241,16 @@ def train():
             imgs = imgs.to(device).float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
             targets = targets.to(device)
 
-            # Hyperparameter Burn-in
-            n_burn = 200  # number of burn-in batches
-            if ni <= n_burn:
-                # g = (ni / n_burn) ** 2  # gain
-                for x in model.named_modules():  # initial stats may be poor, wait to track
-                    if x[0].endswith('BatchNorm2d'):
-                        x[1].track_running_stats = ni == n_burn
-                # for x in optimizer.param_groups:
-                #     x['lr'] = x['initial_lr'] * lf(epoch) * g  # gain rises from 0 - 1
-                #     if 'momentum' in x:
-                #         x['momentum'] = hyp['momentum'] * g
+            # Hyperparameter burn-in
+            # n_burn = nb - 1  # min(nb // 5 + 1, 1000)  # number of burn-in batches
+            # if ni <= n_burn:
+            #     for m in model.named_modules():
+            #         if m[0].endswith('BatchNorm2d'):
+            #             m[1].momentum = 1 - i / n_burn * 0.99  # BatchNorm2d momentum falls from 1 - 0.01
+            #     g = (i / n_burn) ** 4  # gain rises from 0 - 1
+            #     for x in optimizer.param_groups:
+            #         x['lr'] = hyp['lr0'] * g
+            #         x['weight_decay'] = hyp['weight_decay'] * g
 
             # Plot images with bounding boxes
             if ni < 1:
@@ -272,7 +272,7 @@ def train():
             pred = model(imgs)
 
             # Compute loss
-            loss, loss_items = compute_loss(pred, targets, model)
+            loss, loss_items = compute_loss(pred, targets, model, not prebias)
             if not torch.isfinite(loss):
                 print('WARNING: non-finite loss, ending training ', loss_items)
                 return results
@@ -291,7 +291,6 @@ def train():
             if ni % accumulate == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-                # ema.update(model)
 
             # Print batch results
             mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
@@ -305,7 +304,6 @@ def train():
         scheduler.step()
 
         # Process epoch results
-        # ema.update_attr(model)
         final_epoch = epoch + 1 == epochs
         if not opt.notest or final_epoch:  # Calculate mAP
             is_coco = any([x in data for x in ['coco.data', 'coco2014.data', 'coco2017.data']]) and model.nc == 80
@@ -314,7 +312,7 @@ def train():
                                       batch_size=batch_size * 2,
                                       img_size=img_size_test,
                                       model=model,
-                                      conf_thres=0.001 if final_epoch else 0.01,  # 0.001 for best mAP, 0.01 for speed
+                                      conf_thres=1E-3 if opt.evolve or (final_epoch and is_coco) else 0.1,  # 0.1 faster
                                       iou_thres=0.6,
                                       save_json=final_epoch and is_coco,
                                       single_cls=opt.single_cls,
@@ -347,7 +345,8 @@ def train():
                 chkpt = {'epoch': epoch,
                          'best_fitness': best_fitness,
                          'training_results': f.read(),
-                         'model': model.module.state_dict() if hasattr(model, 'module') else model.state_dict(),
+                         'model': model.module.state_dict() if type(
+                             model) is nn.parallel.DistributedDataParallel else model.state_dict(),
                          'optimizer': None if final_epoch else optimizer.state_dict()}
 
             # Save last checkpoint
@@ -390,12 +389,12 @@ def train():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=300)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
-    parser.add_argument('--batch-size', type=int, default=16)  # effective bs = batch_size * accumulate = 16 * 4 = 64
-    parser.add_argument('--accumulate', type=int, default=4, help='batches to accumulate before optimizing')
+    parser.add_argument('--epochs', type=int, default=10000)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
+    parser.add_argument('--batch-size', type=int, default=32)  # effective bs = batch_size * accumulate = 16 * 4 = 64
+    parser.add_argument('--accumulate', type=int, default=2, help='batches to accumulate before optimizing')
     parser.add_argument('--cfg', type=str, default='cfg/yolov3-spp.cfg', help='*.cfg path')
-    parser.add_argument('--data', type=str, default='data/coco2017.data', help='*.data path')
-    parser.add_argument('--multi-scale', action='store_true', help='adjust (67% - 150%) img_size every 10 batches')
+    parser.add_argument('--data', type=str, default='data/oo.data', help='*.data path')
+    parser.add_argument('--multi-scale', default = True, action='store_true', help='adjust (67% - 150%) img_size every 10 batches')
     parser.add_argument('--img-size', nargs='+', type=int, default=[416], help='train and test image-sizes')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
     parser.add_argument('--resume', action='store_true', help='resume training from last.pt')
@@ -403,8 +402,9 @@ if __name__ == '__main__':
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
-    parser.add_argument('--cache-images', action='store_true', help='cache images for faster training')
-    parser.add_argument('--weights', type=str, default='weights/yolov3-spp-ultralytics.pt', help='initial weights path')
+    parser.add_argument('--cache-images', action='store_true', default=True, help='cache images for faster training')
+    parser.add_argument('--weights', type=str, default='', help='initial weights path')
+    parser.add_argument('--arc', type=str, default='default', help='yolo architecture')  # default, uCE, uBCE
     parser.add_argument('--name', default='', help='renames results.txt to results_name.txt if supplied')
     parser.add_argument('--device', default='', help='device id (i.e. 0 or 0,1 or cpu)')
     parser.add_argument('--adam', action='store_true', help='use adam optimizer')
