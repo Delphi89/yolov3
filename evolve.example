@@ -1,0 +1,21 @@
+
+evolve:
+python3 train.py --data data/oo.data --img-size 416 --batch-size 16 --accumulate 4 --multi-scale --evolve
+
+transfer:
+python3 train.py --data data/oo.data --cfg cfg/yolov3-spp.cfg --weights weights/yolov3-spp.pt --transfer
+python3 train.py --data data/oo.data --batch-size 16 --accumulate 4 --nosave --weights weights/yolov3-spp.pt --name new_start
+
+
+
+train from scratch (adam selected in train.py)
+python3 train.py --weights '' --cfg yolov3-spp.cfg --epochs 3000 --batch 16 --accum 4 --multi
+
+
+Detect:
+python3 detect.py --weights weights/best5.pt
+
+
+Resume Training: 
+python3 train.py --resume 
+to resume training from weights/latest.pt
