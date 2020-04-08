@@ -23,24 +23,24 @@ results_file = 'results.txt'
 
 # Hyperparameters (results68: 59.9 mAP@0.5 yolov3-spp-416) https://github.com/ultralytics/yolov3/issues/310
 
-hyp = {'giou': 2.99,  # giou loss gain
-       'cls': 41.4,  # cls loss gain
-       'cls_pw': 1,  # cls BCELoss positive_weight
-       'obj': 64.8,  # obj loss gain (*=img_size/320 if img_size != 320)
-       'obj_pw': 1.02,  # obj BCELoss positive_weight
-       'iou_t': 0.211,  # iou training threshold
-       'lr0': 0.00456,  # initial learning rate (SGD=5E-3, Adam=5E-4)
+hyp = {'giou': 2.34,  # giou loss gain
+       'cls': 36.6,  # cls loss gain
+       'cls_pw': 0.999,  # cls BCELoss positive_weight
+       'obj': 89.6,  # obj loss gain (*=img_size/320 if img_size != 320)
+       'obj_pw': 1.25,  # obj BCELoss positive_weight
+       'iou_t': 0.246,  # iou training threshold
+       'lr0': 0.00398,  # initial learning rate (SGD=5E-3, Adam=5E-4)
        'lrf': -4.,  # final LambdaLR learning rate = lr0 * (10 ** lrf)
-       'momentum': 0.915,  # SGD momentum
-       'weight_decay': 0.000567,  # optimizer weight decay
+       'momentum': 0.9,  # SGD momentum
+       'weight_decay': 0.000542,  # optimizer weight decay
        'fl_gamma': 0.5,  # focal loss gamma
-       'hsv_h': 0.0113,  # image HSV-Hue augmentation (fraction)
-       'hsv_s': 0.691,  # image HSV-Saturation augmentation (fraction)
-       'hsv_v': 0.331,  # image HSV-Value augmentation (fraction)
-       'degrees': 2.06,  # image rotation (+/- deg)
-       'translate': 0.0464,  # image translation (+/- fraction)
+       'hsv_h': 0.0138,  # image HSV-Hue augmentation (fraction)
+       'hsv_s': 0.663,  # image HSV-Saturation augmentation (fraction)
+       'hsv_v': 0.355,  # image HSV-Value augmentation (fraction)
+       'degrees': 2.36,  # image rotation (+/- deg)
+       'translate': 0.0289,  # image translation (+/- fraction)
        'scale': 0.0426,  # image scale (+/- gain)
-       'shear': 0.69}  # image shear (+/- deg)
+       'shear': 0.8}  # image shear (+/- deg)
 
 # Overwrite hyp with hyp*.txt (optional)
 f = glob.glob('hyp*.txt')
@@ -165,6 +165,7 @@ def train():
                                 world_size=1,  # number of nodes for distributed training
                                 rank=0)  # distributed training node rank
         model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
+
         model.yolo_layers = model.module.yolo_layers  # move yolo layer indices to top level
 
     # Dataset
@@ -387,10 +388,12 @@ def train():
     return results
 
 
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=100)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
-    parser.add_argument('--batch-size', type=int, default=32)  # effective bs = batch_size * accumulate = 16 * 4 = 64
+    parser.add_argument('--epochs', type=int, default=8000)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
+    parser.add_argument('--batch-size', type=int, default=16)  # effective bs = batch_size * accumulate = 16 * 4 = 64
     parser.add_argument('--accumulate', type=int, default=2, help='batches to accumulate before optimizing')
     parser.add_argument('--cfg', type=str, default='cfg/yolov3-spp.cfg', help='*.cfg path')
     parser.add_argument('--data', type=str, default='data/oo.data', help='*.data path')
